@@ -6,6 +6,7 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_video_call/screens/videocallPage.dart';
+import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:http/http.dart' as http;
 
 class homePage extends StatefulWidget {
@@ -36,38 +37,166 @@ class _homePageState extends State<homePage> {
     // return codeDigits.join();
   }
 
-  Future<void> sendPostRequest() async {
-    String username = usernameController.text;
-    // String meeting_code = meetingCodeController.text;
-    var url = Uri.parse('https://myvideocall-api.onrender.com/videocall/');
-    var body = jsonEncode({'user1name': username, 'meeting_code': meetingCode});
-
-    var response = await http
-        .post(url, body: body, headers: {"Content-Type": "application/json"});
-
-    if (response.statusCode == 200) {
-            setState(() {
-        isLoading=false;
-      });
-      // If server returns an OK response, navigate to VideoCallPage
+  Future<void> sendAnswerAndIceCandidate(
+      String meetingCode, String answerSdp, String iceCandidate) async {
+    final response = await http.post(
+      Uri.parse('http://192.168.1.4/videocall/'),
+      headers: <String, String>{
+        'Content-Type': 'application/json; charset=UTF-8',
+      },
+      body: jsonEncode(<String, String>{
+        'meeting_code': meetingCode,
+        'answer_sdp': answerSdp,
+        'user2_ice_candidates': iceCandidate,
+      }),
+    );
+    if (response.statusCode==200){
       Navigator.push(
         context,
-        MaterialPageRoute(builder: (context) => VideoCallScreen()),
+        MaterialPageRoute(
+          builder: (context) => VideoCallScreen(
+            // meetingCode: meetingCode,
+            // username: usernameController.text,
+          ),
+        ),
       );
-    } else if (response.statusCode == 201) {
-      // If server returns an OK response, navigate to VideoCallPage
-            setState(() {
-        isLoading=false;
-      });
-      Navigator.push(
-        context,
-        MaterialPageRoute(builder: (context) => VideoCallScreen()),
-      );
-    } else {
-
-      // If response was not OK, set the error message
+    }
+    else{
       setState(() {
-        isLoading=false;
+        isError = true;
+        isLoading = false;
+        errorMsg = "Error: ${response.statusCode}";
+      });
+    }
+  }
+
+  Future<void> sendOfferAndIceCandidate(
+      String meetingCode, String offerSdp, String iceCandidate) async {
+    print("❌ " + meetingCode + " " + offerSdp + " " + iceCandidate);
+    final response = await http.post(
+      Uri.parse('http://192.168.1.4/videocall/'),
+      headers: <String, String>{
+        'Content-Type': 'application/json; charset=UTF-8',
+      },
+      body: jsonEncode(<String, String>{
+        'meeting_code': meetingCode,
+        'offer_sdp': offerSdp,
+        'user1_ice_candidates': iceCandidate,
+        'user1name': 'YourUserName', // replace with actual user name
+      }),
+    );
+    if (response.statusCode==201){
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => VideoCallScreen(
+            // meetingCode: meetingCode,
+            // username: usernameController.text,
+          ),
+        ),
+      );
+    }
+    else{
+      setState(() {
+        isError = true;
+        isLoading = false;
+        errorMsg = "Error: ${response.statusCode}";
+      });
+    }
+  }
+
+  Future<String?> createOfferSdp() async {
+    // Create RTCPeerConnection
+    Map<String, dynamic> configuration = {
+      "iceServers": [
+        {"url": "stun:stun.l.google.com:19302"},
+      ]
+    };
+    RTCPeerConnection pc = await createPeerConnection(configuration, {});
+    // Create offer
+    RTCSessionDescription offer = await pc.createOffer({});
+    // Set local description
+    await pc.setLocalDescription(offer);
+    // Return offer SDP
+    return offer.sdp;
+  }
+
+  Future<List<RTCIceCandidate>> gatherIceCandidates() async {
+    // Create RTCPeerConnection
+    Map<String, dynamic> configuration = {
+      "iceServers": [
+        {"url": "stun:stun.l.google.com:19302"},
+      ]
+    };
+    RTCPeerConnection pc = await createPeerConnection(configuration, {});
+    // Create offer
+    RTCSessionDescription offer = await pc.createOffer({});
+    // Set local description
+    await pc.setLocalDescription(offer);
+    // Gather ICE candidates
+    List<RTCIceCandidate> iceCandidates = [];
+    pc.onIceCandidate = (RTCIceCandidate candidate) {
+      if (candidate != null) {
+        iceCandidates.add(candidate);
+      }
+    };
+    // Wait for ICE gathering to complete
+    await Future.delayed(Duration(seconds: 5));
+    // Return ICE candidates
+    return iceCandidates;
+  }
+
+  Future<String?> createAnswerSdp(String offerSdp) async {
+    // Create RTCPeerConnection
+    Map<String, dynamic> configuration = {
+      "iceServers": [
+        {"url": "stun:stun.l.google.com:19302"},
+      ]
+    };
+    RTCPeerConnection pc = await createPeerConnection(configuration, {});
+    // Set remote description
+    RTCSessionDescription offer = RTCSessionDescription(offerSdp, 'offer');
+    await pc.setRemoteDescription(offer);
+    // Create answer
+    RTCSessionDescription answer = await pc.createAnswer({});
+    // Set local description
+    await pc.setLocalDescription(answer);
+    // Return answer SDP
+    return answer.sdp;
+  }
+
+  Future<void> sendPostRequest() async {
+    final response = await http.get(
+      Uri.parse('http://192.168.1.4/videocall/$meetingCode'),
+      headers: {"Content-Type": "application/json"},
+    );
+    print("❌ " + response.statusCode.toString());
+    if (response.statusCode == 200) {
+      // Get offer_sdp from response
+      String offerSdp = jsonDecode(response.body)['offer_sdp'];
+
+      // Generate answer_sdp
+      String? answerSdp = await createAnswerSdp(offerSdp);
+
+      // Gather user2_ice_candidate
+      List<RTCIceCandidate> iceCandidates = await gatherIceCandidates();
+
+      // Send answer_sdp and user2_ice_candidate
+      await sendAnswerAndIceCandidate(meetingCode, answerSdp!, iceCandidates as String);
+    } else if (response.statusCode == 404) {
+      // Generate user1_ice_candidate
+      List<RTCIceCandidate> iceCandidates = await gatherIceCandidates();
+
+      // Generate offer_sdp
+      String? offerSdp = await createOfferSdp();
+
+      // Send offer_sdp and user1_ice_candidate
+      await sendOfferAndIceCandidate(meetingCode, offerSdp!, iceCandidates as String);
+    }
+    else{
+      setState(() {
+        isError = true;
+        isLoading = false;
         errorMsg = "Error: ${response.statusCode}";
       });
     }
@@ -86,30 +215,20 @@ class _homePageState extends State<homePage> {
     if (username.isEmpty) {
       setState(() {
         isError = true;
-        isLoading=false;
+        isLoading = false;
         errorMsg = "Username is empty, please enter a user name.";
       });
       return;
     }
-    // print("Meeting Code:$meetingCode ");
-    // print(meetingCode.length);
-    else if (meetingCode.isEmpty) {
-      setState(() {
-        isError = true;
-        isLoading=false;
-        errorMsg =
-            "Meeting code is empty, please generate or enter a meeting code.";
-        meetingCode = '';
-      });
-      return;
-    }
-    // else if (meetingCode != 10) {
+    // else if (meetingCode.isEmpty) {
     //   setState(() {
     //     isError = true;
+    //     isLoading = false;
     //     errorMsg =
-    //         "Meeting code is invalid, please generate or enter a valid meeting code.";
+    //         "Meeting code is empty, please generate or enter a meeting code.";
+    //     meetingCode = '';
     //   });
-    //   return;
+    // return;
     // }
     else {
       sendPostRequest();
@@ -212,7 +331,6 @@ class _homePageState extends State<homePage> {
                     ),
                   ),
                 ),
-                // SizedBox(height: 20,),
                 Container(
                   margin: const EdgeInsets.only(left: 100),
                   child: TextButton(
